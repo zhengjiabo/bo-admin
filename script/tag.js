@@ -9,11 +9,8 @@ const step = (() => {
   let num = 0
   return msg => console.log(chalk.cyan(`${++num}. ${msg}`))
 })()
-const run = (bin, args, opts = {}, cb) => execa(bin, args, { stdio: 'inherit', ...opts }, cb)
-const dryRun = (bin, args, opts = {}) => {
-  chalk.blue(`[dryrun] ${bin} ${args.join(' ')}`, opts)
-  return { error: null, stdout: '', stderr: '' }
-}
+const run = (bin, args, opts = {}, isShell) => isShell ? execa.shell(bin, opts) : execa(bin, args, { stdio: 'inherit', ...opts })
+const dryRun = (bin, args, opts = {}) => chalk.blue(`[dryrun] ${bin} ${args.join(' ')}`, opts)
 const runIfNotDry = isDryRun ? dryRun : run
 
 async function main () {
@@ -105,8 +102,10 @@ async function main () {
 
     step(`已获取到Git上最大版本tag为: ${chalk.yellow(tag)}`)
 
-    const minorTag = `${flag}_${minor * 1 + 1}_1_yyyyMMdd`
-    const patchTag = `${flag}_${minor}_${patch * 1 + 1}_${date}`
+    const minorTag = `${flag}_${minor * 1 + 1}_01_yyyyMMdd`
+    let increasePatch = `${patch * 1 + 1}`
+    increasePatch = increasePatch.length === 1 ? `0${increasePatch}` : increasePatch
+    const patchTag = `${flag}_${minor}_${increasePatch}_${date}`
 
     const choices = [
       {
@@ -199,15 +198,18 @@ async function main () {
  * 核验是否本地文件是否有改动
  */
 async function isDiff () {
-  const obj = await runIfNotDry('git', ['diff'], { stdio: '' })
-  const { error, stdout, stderr } = obj
+  const [error, stdout, stderr] = await new Promise(resolve => {
+    childProcess.exec('git diff', {}, (...params) => resolve(params))
+  })
 
   if (error) {
     throw new Error(`isDiff: ${error} ${stderr}`)
   }
 
   if (!stdout) {
-    const { error, stdout, stderr } = await runIfNotDry('git', ['status', '-u', '-z'], { stdio: '' })
+    const [error, stdout, stderr] = await new Promise(resolve => {
+      childProcess.exec('git status', {}, (...params) => resolve(params))
+    })
     if (error) {
       throw new Error(`isDiff: ${error} ${stderr}`)
     }
@@ -220,14 +222,12 @@ async function isDiff () {
  * 取得最大的版本标签
  */
 async function getFinalTag () {
-  const [error, stdout, stderr] = await new Promise(resolve => {
-    childProcess.exec('git tag', {}, (...params) => resolve(params))
-  })
+  const { error, stdout, stderr } = await runIfNotDry('git ls-remote | grep -v "\\^" | grep -o "refs/tags/.*"', [], {}, true)
 
   if (error) {
     throw new Error(`getFinalTag: ${error} ${stderr}`)
   }
-  const tagsArr = stdout.split('\n').filter(tag => tag)
+  const tagsArr = stdout.split('\n').map(tag => tag.replace('refs/tags/', '')).filter(tag => tag)
   const regMax = /(.*?)_(\d+)_(\d+)_(\d+)/
 
   // 取得最大次版本号, 日期
